@@ -1,0 +1,25 @@
+# Virtual environment
+.venv/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+
+# Entire datasets folder
+datasets/
+
+# Generated outputs
+outputs/
+
+# Logs
+logs/
+
+# Models
+models/checkpoints/
+models/final/
+models/exported/
+
+# IDE
+.vscode/
+.idea/
