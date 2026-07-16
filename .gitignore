@@ -1,25 +1,24 @@
-# Virtual environment
+# Virtual Environment
 .venv/
-venv/
 
-# Python
-__pycache__/
-*.py[cod]
+# Raw datasets
+datasets/raw/
 
-# Entire datasets folder
-datasets/
+# Processed datasets
+datasets/processed/
 
-# Generated outputs
+# Generated features
+features/
+
+# Outputs
 outputs/
 
 # Logs
 logs/
 
-# Models
+# Model checkpoints
 models/checkpoints/
-models/final/
-models/exported/
 
-# IDE
-.vscode/
-.idea/
+# Python cache
+__pycache__/
+*.pyc

@@ -2,10 +2,18 @@
 Audio quality metrics.
 """
 
+
+
 import numpy as np
 
 
 def compute_metrics(audio, sample_rate):
+
+    if sample_rate <= 0:
+        raise ValueError("sample_rate must be greater than zero")
+
+    if len(audio) == 0:
+        raise ValueError("audio array is empty")
 
     duration = len(audio) / sample_rate
 
@@ -26,3 +34,5 @@ def compute_metrics(audio, sample_rate):
         "dynamic_range": dynamic_range,
         "silence_ratio": silence_ratio
     }
+
+    
