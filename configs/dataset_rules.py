@@ -164,9 +164,13 @@ DATASET_RULES: tuple[DatasetRule, ...] = (
     DatasetRule(
         name="uavirbase",
         raw_directory_name="uavirbase",
-        enabled=False,
+        enabled=True,
         label_source=LabelSource.ANNOTATION_FILE,
-        description="Pending download and official annotation adapter.",
+        annotation_file_name="label.json",
+        description=(
+        "UaVirBASE multichannel UAV recordings. Labels and metadata "
+        "are read from each recording's label.json file."
+        ),
     ),
     DatasetRule(
         name="audioset",

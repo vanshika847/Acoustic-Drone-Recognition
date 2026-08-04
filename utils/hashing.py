@@ -1,23 +1,35 @@
 """
-Generate SHA256 hashes for files.
+Generate SHA-256 hashes for files.
 """
 
+from __future__ import annotations
+
 import hashlib
+from pathlib import Path
+
+HASH_CHUNK_SIZE_BYTES = 1024 * 1024
 
 
-def sha256_file(file_path):
+def sha256_file(file_path: str | Path) -> str:
+    """
+    Compute the SHA-256 hash of a file.
 
-    sha = hashlib.sha256()
+    Args:
+        file_path: Path to the file.
 
-    with open(file_path, "rb") as f:
+    Returns:
+        Lowercase hexadecimal SHA-256 digest.
+    """
 
-        while True:
+    file_path = Path(file_path)
 
-            block = f.read(8192)
+    digest = hashlib.sha256()
 
-            if not block:
-                break
+    with file_path.open("rb") as audio_file:
+        for chunk in iter(
+            lambda: audio_file.read(HASH_CHUNK_SIZE_BYTES),
+            b"",
+        ):
+            digest.update(chunk)
 
-            sha.update(block)
-
-    return sha.hexdigest()
+    return digest.hexdigest()

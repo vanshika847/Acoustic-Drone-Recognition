@@ -40,15 +40,13 @@ from __future__ import annotations
 
 import argparse
 import csv
-import hashlib
 import logging
-import os
 import sys
 import tempfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Iterator, Sequence
+from typing import Sequence
 
 # Support direct execution (``python preprocessing/build_dataset.py``) as well
 # as the preferred module form (``python -m preprocessing.build_dataset``).
@@ -59,13 +57,20 @@ if __package__ in {None, ""}:
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-from configs.config import METADATA_DIR, RAW_DATASET_DIR, SUPPORTED_AUDIO_EXTENSIONS
-from configs.dataset_rules import DatasetRule, LabelSource, get_enabled_dataset_rules
+from configs.config import (
+    METADATA_DIR,
+    RAW_DATASET_DIR,
+)
+from configs.dataset_rules import (
+    DatasetRule,
+    get_enabled_dataset_rules,
+)
+from preprocessing.adapters.drone_audio import DroneAudioAdapter
+from preprocessing.adapters.uavirbase import UAVirBaseAdapter
 
 
 LOGGER = logging.getLogger(__name__)
 DEFAULT_MANIFEST_FILENAME = "supervised_manifest.csv"
-HASH_CHUNK_SIZE_BYTES = 1024 * 1024
 MANIFEST_COLUMNS = (
     "dataset",
     "relative_path",
@@ -76,6 +81,14 @@ MANIFEST_COLUMNS = (
     "size_bytes",
     "sha256",
 )
+# ==========================================================
+# Dataset Adapters
+# ==========================================================
+
+DATASET_ADAPTERS = {
+    "drone_audio": DroneAudioAdapter,
+    "uavirbase": UAVirBaseAdapter,
+}
 
 
 class ManifestBuildError(RuntimeError):
@@ -101,115 +114,6 @@ class ManifestBuildSummary:
     skipped_unlabelled_files: int
     missing_enabled_datasets: tuple[str, ...]
     created_at_utc: str
-
-
-def _iter_audio_files(dataset_directory: Path) -> Iterator[Path]:
-    """Yield supported audio files in deterministic directory order.
-
-    Args:
-        dataset_directory: Root directory for one registered raw dataset.
-
-    Yields:
-        Supported audio files below ``dataset_directory``.
-    """
-
-    for current_root, directory_names, file_names in os.walk(dataset_directory):
-        directory_names.sort()
-        for file_name in sorted(file_names):
-            candidate = Path(current_root) / file_name
-            if candidate.suffix.lower() in SUPPORTED_AUDIO_EXTENSIONS:
-                yield candidate
-
-
-def _resolve_directory_label(
-    file_path: Path, dataset_directory: Path, rule: DatasetRule
-) -> int | None:
-    """Resolve a binary label using a rule's approved relative directories.
-
-    Args:
-        file_path: Candidate audio file inside the rule's dataset directory.
-        dataset_directory: Dataset root used for this build.
-        rule: Dataset policy defining the approved label directories.
-
-    Returns:
-        ``0`` or ``1`` when a mapping matches, otherwise ``None``.
-
-    Raises:
-        ManifestBuildError: If the file is not located below the dataset root.
-    """
-
-    try:
-        relative_file = file_path.relative_to(dataset_directory)
-    except ValueError as error:
-        raise ManifestBuildError(
-            f"File '{file_path}' is outside registered dataset '{rule.name}'."
-        ) from error
-
-    path_parts = relative_file.parts[:-1]
-    for directory, label in sorted(
-        rule.directory_label_map().items(),
-        key=lambda item: len(Path(item[0]).parts),
-        reverse=True,
-    ):
-        directory_parts = Path(directory).parts
-        if path_parts[: len(directory_parts)] == directory_parts:
-            return label
-    return None
-
-
-def _sha256_file(file_path: Path) -> str:
-    """Calculate a SHA-256 digest without loading an entire file into memory.
-
-    Args:
-        file_path: File to hash.
-
-    Returns:
-        Lowercase hexadecimal SHA-256 digest.
-    """
-
-    digest = hashlib.sha256()
-    with file_path.open("rb") as audio_file:
-        for chunk in iter(lambda: audio_file.read(HASH_CHUNK_SIZE_BYTES), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
-
-
-def _build_manifest_row(
-    file_path: Path, dataset_directory: Path, rule: DatasetRule, binary_label: int
-) -> dict[str, str | int]:
-    """Create one manifest row for a labelled directory-based audio file.
-
-    Args:
-        file_path: Labelled audio file below the dataset root.
-        dataset_directory: Dataset root used for this build.
-        rule: Source dataset rule.
-        binary_label: Previously validated binary target.
-
-    Returns:
-        CSV-compatible manifest row.
-
-    Raises:
-        ManifestBuildError: If the configured label source is unsupported.
-    """
-
-    if rule.label_source is not LabelSource.DIRECTORY:
-        raise ManifestBuildError(
-            f"Dataset '{rule.name}' uses '{rule.label_source}', which requires "
-            "a dedicated annotation adapter before it can build a manifest."
-        )
-
-    relative_path = file_path.relative_to(dataset_directory)
-    return {
-        "dataset": rule.name,
-        "relative_path": relative_path.as_posix(),
-        "file_name": file_path.name,
-        "extension": file_path.suffix.lower(),
-        "binary_label": binary_label,
-        "label_origin": f"directory:{relative_path.parts[0]}",
-        "size_bytes": file_path.stat().st_size,
-        "sha256": _sha256_file(file_path),
-    }
-
 
 def build_supervised_manifest(
     raw_datasets_directory: Path = RAW_DATASET_DIR,
@@ -272,29 +176,24 @@ def build_supervised_manifest(
                     missing_enabled_datasets.append(rule.name)
                     continue
 
-                if rule.label_source is not LabelSource.DIRECTORY:
+                adapter_class = DATASET_ADAPTERS.get(rule.name)
+                if adapter_class is None:
                     raise ManifestBuildError(
-                        f"Dataset '{rule.name}' is enabled but uses "
-                        f"'{rule.label_source}'. Implement its annotation adapter "
-                        "before enabling it."
+                          f"No adapter registered for dataset '{rule.name}'."
                     )
 
-                for audio_file in _iter_audio_files(dataset_directory):
-                    label = _resolve_directory_label(
-                        audio_file, dataset_directory, rule
-                    )
+                adapter = adapter_class()
 
-                    if label is None:
-                        skipped_unlabelled_files += 1
-                        continue
-
-                    row = _build_manifest_row(
-                        audio_file, dataset_directory, rule, label
-                    )
+                for row in adapter.build_rows(
+                    dataset_directory,
+                    rule,
+                ):
                     writer.writerow(row)
                     included_files += 1
+                    
         except Exception:
-            temporary_path.unlink(missing_ok=True)
+            if temporary_path.exists():
+                temporary_path.unlink()
             raise
 
     temporary_path.replace(destination)

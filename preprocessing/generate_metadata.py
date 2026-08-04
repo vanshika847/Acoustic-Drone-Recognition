@@ -131,17 +131,17 @@ def collect_audio_files():
 
 def main():
 
-    print("=" * 60)
-    print("Generating Master Metadata")
+    print("=" * 60)  # print a separator line for better readability
+    print("Generating Master Metadata") # print a message indicating the start of metadata generation
     print("=" * 60)
 
-    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    OUTPUT_DIR.mkdir(parents=True, exist_ok=True)  # creates the output directory if it doesn't exist
 
     audio_files = collect_audio_files()
 
     df = pd.DataFrame(audio_files)
 
-    output_file = OUTPUT_DIR / "master_metadata.csv"
+    output_file = OUTPUT_DIR / "master_metadata.csv" 
 
     df.to_csv(output_file, index=False)
 

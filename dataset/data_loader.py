@@ -14,6 +14,7 @@ def create_dataloader(
     batch_size: int = 32,
     shuffle: bool = True,
     num_workers: int = 0,
+    pin_memory: bool = False,
 ) -> DataLoader:
     """Create a DataLoader from a feature manifest."""
 
@@ -24,5 +25,5 @@ def create_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
-        pin_memory=False,
+        pin_memory=pin_memory,
     )
