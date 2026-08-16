@@ -122,7 +122,6 @@ def train_one_epoch(
         for key, value in batch.items():
 
             if isinstance(value, torch.Tensor):
-
                 batch[key] = value.to(device)
 
         labels = batch["label"]
@@ -146,8 +145,8 @@ def train_one_epoch(
 
         loss.backward()
 
-        torch.nn.utils.clip_grad_norm_(
-            model.parameters(),
+        torch.nn.utils.clip_grad_norm_( 
+            model.parameters(),   
             GRADIENT_CLIP,
         )
 
@@ -268,6 +267,67 @@ def validate_one_epoch(
     accuracy = 100.0 * correct / total
 
     return average_loss, accuracy
+
+
+def calculate_class_weights(
+    manifest_path: Path,
+    device: torch.device,
+) -> torch.Tensor:
+    """
+    Calculate inverse-frequency class weights
+    from the training manifest.
+
+    Class 0 = background
+    Class 1 = drone
+    """
+
+    import pandas as pd
+
+    manifest = pd.read_csv(manifest_path)
+
+    counts = (
+        manifest["binary_label"]
+        .astype(int)
+        .value_counts()
+        .sort_index()
+    )
+
+    if 0 not in counts or 1 not in counts:
+        raise ValueError(
+            "Training manifest must contain both "
+            "binary labels 0 and 1."
+        )
+
+    class_0_count = counts[0]
+    class_1_count = counts[1]
+
+    total = class_0_count + class_1_count
+    num_classes = 2
+
+    weights = torch.tensor(
+        [
+            total / (num_classes * class_0_count),
+            total / (num_classes * class_1_count),
+        ],
+        dtype=torch.float32,
+        device=device,
+    )
+
+    logger.info(
+        "Class distribution: background=%d, drone=%d",
+        class_0_count,
+        class_1_count,
+    )
+
+    logger.info(
+        "Class weights: background=%.4f, drone=%.4f",
+        weights[0].item(),
+        weights[1].item(),
+    )
+
+    return weights
+
+
 def train() -> None:
     """
     Train the Acoustic Drone Recognition Network.
@@ -303,7 +363,15 @@ def train() -> None:
 
     model = AcousticDroneNet().to(device)
 
-    criterion = nn.CrossEntropyLoss()
+
+    class_weights = calculate_class_weights(
+        TRAIN_MANIFEST,
+        device,
+    )
+
+    criterion = nn.CrossEntropyLoss(
+        weight=class_weights,
+    )
 
     optimizer = AdamW(
         model.parameters(),

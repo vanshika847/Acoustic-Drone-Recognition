@@ -73,6 +73,25 @@ class DroneAudioAdapter(DatasetAdapter):
                     "label_origin": f"directory:{relative_path.parts[0]}",
                     "size_bytes": file_path.stat().st_size,
                     "sha256": sha256_file(file_path),
-                }
+
+                    "drone_type": "",
+                    "movement": "",
+                    "rotation": "",
+
+                    "distance_m": "",
+                    "height_m": "",
+                    "azimuth_deg": "",
+
+                    "recording_start": "",
+                    "recording_end": "",
+
+                    "temperature_c": "",
+                    "humidity_percent": "",
+                    "wind_speed_ms": "",
+                    "wind_direction_deg": "",
+
+                    "latitude": "",
+                    "longitude": "",
+}
 
     

@@ -34,6 +34,16 @@ class DroneClassifier(nn.Module):
     ) -> None:
         super().__init__()
 
+        if num_classes < 2:
+            raise ValueError(
+            f"num_classes must be at least 2, got {num_classes}."
+        )
+
+        if num_classes < 2:
+            raise ValueError(
+                f"num_classes must be at least 2, got {num_classes}."
+            )
+
         self.classifier = nn.Sequential(
             nn.Linear(fused_dim, hidden_dim),
             nn.BatchNorm1d(hidden_dim),
