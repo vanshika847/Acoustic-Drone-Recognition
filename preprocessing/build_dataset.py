@@ -12,25 +12,13 @@ this manifest. They are handled by build_background_manifest.py.
 The manifest is an immutable reference to raw audio; this module never copies,
 resamples, or modifies a raw recording.
 
-Inputs
-------
-Enabled configs.dataset_rules.DatasetRule entries and their source
-directories below datasets/raw.
-
 Outputs
 -------
-datasets/metadata/supervised_manifest.csv containing one row per explicitly
-labelled drone-positive audio file.
-
-Usage
------
-From the repository root:
-
-    python -m preprocessing.build_dataset
+datasets/metadata/supervised_manifest.csv
 """
 
 from __future__ import annotations
-
+from preprocessing.adapters.ddl import DDLAdapter
 import argparse
 import csv
 import logging
@@ -41,26 +29,59 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Sequence
 
-# Support direct execution as well as module execution.
+# ---------------------------------------------------------------------------
+# Support direct execution as well as module execution
+# ---------------------------------------------------------------------------
+
 if __package__ in {None, ""}:
     PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
     if str(PROJECT_ROOT) not in sys.path:
         sys.path.insert(0, str(PROJECT_ROOT))
 
-from configs.config import METADATA_DIR, RAW_DATASET_DIR
+
+# ---------------------------------------------------------------------------
+# Project imports
+# ---------------------------------------------------------------------------
+
+from configs.config import (
+    METADATA_DIR,
+    RAW_DATASET_DIR,
+)
+
 from configs.dataset_rules import (
     DatasetRule,
     get_enabled_dataset_rules,
 )
-from preprocessing.adapters.drone_audio import DroneAudioAdapter
-from preprocessing.adapters.uavirbase import UAVirBaseAdapter
-from preprocessing.adapters.al_emadi import AlEmadiAdapter
 
+from preprocessing.adapters.al_emadi import AlEmadiAdapter
+from preprocessing.adapters.drone_audio import DroneAudioAdapter
+from preprocessing.adapters.kaist import KaistAdapter
+from preprocessing.adapters.uavirbase import UAVirBaseAdapter
 
 
 LOGGER = logging.getLogger(__name__)
 
+
+# ---------------------------------------------------------------------------
+# Dataset adapter registry
+# ---------------------------------------------------------------------------
+
+DATASET_ADAPTERS = {
+    "drone_audio": DroneAudioAdapter,
+    "al_emadi": AlEmadiAdapter,
+    "kaist": KaistAdapter,
+    "uavirbase": UAVirBaseAdapter,
+    "ddl": DDLAdapter,
+}
+
+
+# ---------------------------------------------------------------------------
+# Constants
+# ---------------------------------------------------------------------------
+
 DEFAULT_MANIFEST_FILENAME = "supervised_manifest.csv"
+
 
 MANIFEST_COLUMNS = (
     "dataset",
@@ -98,16 +119,17 @@ MANIFEST_COLUMNS = (
 )
 
 
-DATASET_ADAPTERS = {
-    "drone_audio": DroneAudioAdapter,
-    "uavirbase": UAVirBaseAdapter,
-    "al_emadi": AlEmadiAdapter,
-}
-
+# ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
 
 class ManifestBuildError(RuntimeError):
     """Raised when a supervised dataset manifest cannot be built safely."""
 
+
+# ---------------------------------------------------------------------------
+# Summary
+# ---------------------------------------------------------------------------
 
 @dataclass(frozen=True, slots=True)
 class ManifestBuildSummary:
@@ -119,6 +141,10 @@ class ManifestBuildSummary:
     missing_enabled_datasets: tuple[str, ...]
     created_at_utc: str
 
+
+# ---------------------------------------------------------------------------
+# Manifest builder
+# ---------------------------------------------------------------------------
 
 def build_supervised_manifest(
     raw_datasets_directory: Path = RAW_DATASET_DIR,
@@ -159,28 +185,30 @@ def build_supervised_manifest(
     skipped_non_positive_files = 0
     missing_enabled_datasets: list[str] = []
 
-    with tempfile.NamedTemporaryFile(
-        mode="w",
-        encoding="utf-8",
-        newline="",
-        prefix=f".{destination.stem}.",
-        suffix=".tmp",
-        dir=destination.parent,
-        delete=False,
-    ) as temporary_file:
+    temporary_path: Path | None = None
 
-        temporary_path = Path(
-            temporary_file.name
-        )
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            newline="",
+            prefix=f".{destination.stem}.",
+            suffix=".tmp",
+            dir=destination.parent,
+            delete=False,
+        ) as temporary_file:
 
-        writer = csv.DictWriter(
-            temporary_file,
-            fieldnames=MANIFEST_COLUMNS,
-        )
+            temporary_path = Path(
+                temporary_file.name
+            )
 
-        writer.writeheader()
+            writer = csv.DictWriter(
+                temporary_file,
+                fieldnames=MANIFEST_COLUMNS,
+            )
 
-        try:
+            writer.writeheader()
+
             for rule in selected_rules:
 
                 dataset_directory = (
@@ -189,6 +217,7 @@ def build_supervised_manifest(
                 )
 
                 if not dataset_directory.is_dir():
+
                     LOGGER.warning(
                         "Enabled dataset directory is missing: %s",
                         dataset_directory,
@@ -206,8 +235,14 @@ def build_supervised_manifest(
 
                 if adapter_class is None:
                     raise ManifestBuildError(
-                        f"No adapter registered for dataset '{rule.name}'."
+                        f"No adapter registered for dataset "
+                        f"'{rule.name}'."
                     )
+
+                LOGGER.info(
+                    "Processing dataset: %s",
+                    rule.name,
+                )
 
                 adapter = adapter_class()
 
@@ -216,39 +251,77 @@ def build_supervised_manifest(
                     rule,
                 ):
 
-                    # --------------------------------------------------
-                    # IMPORTANT:
-                    # supervised_manifest.csv contains ONLY positives.
-                    # --------------------------------------------------
-
                     binary_label = row.get(
                         "binary_label"
                     )
 
+                    # --------------------------------------------------
+                    # supervised_manifest contains ONLY positives.
+                    # --------------------------------------------------
+
                     if str(binary_label) != "1":
+
                         skipped_non_positive_files += 1
 
                         LOGGER.debug(
-                            "Skipping non-positive row from supervised "
-                            "manifest: %s",
+                            "Skipping non-positive row: %s",
                             row.get("relative_path"),
                         )
 
                         continue
 
                     writer.writerow(row)
+
                     included_files += 1
 
-        except Exception:
+    except Exception:
+
+        # Close the temporary file before attempting deletion.
+        # This avoids Windows WinError 32.
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(
+                    missing_ok=True
+                )
+            except PermissionError:
+                LOGGER.warning(
+                    "Could not immediately remove temporary file: %s",
+                    temporary_path,
+                )
+
+        raise
+
+    # -----------------------------------------------------------------------
+    # Atomic replacement
+    # -----------------------------------------------------------------------
+
+    if temporary_path is None:
+        raise ManifestBuildError(
+            "Temporary manifest file was not created."
+        )
+
+    try:
+        temporary_path.replace(
+            destination
+        )
+
+    except Exception:
+
+        try:
             temporary_path.unlink(
                 missing_ok=True
             )
-            raise
+        except PermissionError:
+            LOGGER.warning(
+                "Could not remove temporary manifest: %s",
+                temporary_path,
+            )
 
-    # Atomic replacement.
-    temporary_path.replace(
-        destination
-    )
+        raise
+
+    # -----------------------------------------------------------------------
+    # Summary
+    # -----------------------------------------------------------------------
 
     created_at_utc = datetime.now(
         UTC
@@ -276,6 +349,10 @@ def build_supervised_manifest(
 
     return summary
 
+
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
 
 def _parse_arguments() -> argparse.Namespace:
     """Parse command-line arguments."""

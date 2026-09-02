@@ -8,49 +8,46 @@ import torch.nn as nn
 
 class FeatureFusion(nn.Module):
     """
-    Fuse multiple feature embeddings into a single representation.
+    Fuse six attention-weighted feature embeddings.
 
-    Input
-    -----
-    (batch_size, num_features, embedding_dim)
-
-    Output
-    ------
-    (batch_size, fused_dim)
+    In addition to the flattened embeddings, mean and max statistics are
+    provided to the fusion MLP. LayerNorm keeps the network stable with
+    small batches.
     """
 
     def __init__(
         self,
         num_features: int = 6,
         embedding_dim: int = 128,
-        hidden_dim: int = 512,
+        hidden_dim: int = 384,
         fused_dim: int = 256,
-        dropout: float = 0.30,
+        dropout: float = 0.25,
     ) -> None:
         super().__init__()
 
+        if num_features <= 0 or embedding_dim <= 0:
+            raise ValueError("num_features and embedding_dim must be > 0.")
+
         self.num_features = num_features
         self.embedding_dim = embedding_dim
-        self.hidden_dim = hidden_dim
         self.fused_dim = fused_dim
 
-        input_dim = num_features * embedding_dim
+        input_dim = (
+            num_features * embedding_dim
+            + 2 * embedding_dim
+        )
 
         self.fusion = nn.Sequential(
             nn.Linear(input_dim, hidden_dim),
-            nn.BatchNorm1d(hidden_dim),
-            nn.ReLU(inplace=True),
+            nn.LayerNorm(hidden_dim),
+            nn.GELU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, fused_dim),
-            nn.BatchNorm1d(fused_dim),
-            nn.ReLU(inplace=True),
+            nn.LayerNorm(fused_dim),
+            nn.GELU(),
         )
 
-    def forward(
-        self,
-        features: torch.Tensor,
-    ) -> torch.Tensor:
-
+    def forward(self, features: torch.Tensor) -> torch.Tensor:
         if features.ndim != 3:
             raise ValueError(
                 "Expected input shape "
@@ -59,24 +56,30 @@ class FeatureFusion(nn.Module):
 
         if features.shape[1] != self.num_features:
             raise ValueError(
-                f"Expected {self.num_features} features "
-                f"but received {features.shape[1]}."
+                f"Expected {self.num_features} features, "
+                f"got {features.shape[1]}."
             )
 
         if features.shape[2] != self.embedding_dim:
             raise ValueError(
-                f"Expected embedding dimension "
-                f"{self.embedding_dim}, "
+                f"Expected embedding dimension {self.embedding_dim}, "
                 f"got {features.shape[2]}."
             )
 
-        batch_size = features.shape[0]
+        flattened = features.flatten(start_dim=1)
+        mean_features = features.mean(dim=1)
+        max_features = features.amax(dim=1)
 
-        features = features.reshape(
-            batch_size,
-            self.num_features * self.embedding_dim,
+        fusion_input = torch.cat(
+            [
+                flattened,
+                mean_features,
+                max_features,
+            ],
+            dim=1,
         )
 
-        fused = self.fusion(features)
+        return self.fusion(fusion_input)
 
-        return fused
+
+__all__ = ["FeatureFusion"]

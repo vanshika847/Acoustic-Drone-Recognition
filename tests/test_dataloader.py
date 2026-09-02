@@ -7,7 +7,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 from dataset.data_loader import create_dataloader
 
 loader = create_dataloader(
-    PROJECT_ROOT / "outputs/features/train_feature_manifest.csv",
+    PROJECT_ROOT / "outputs/features/train_shard_manifest.csv",
     batch_size=8,
 )
 

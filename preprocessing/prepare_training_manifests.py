@@ -151,24 +151,88 @@ def _read_csv_rows(manifest_path: Path, required_columns: set[str]) -> list[dict
         return list(reader)
 
 
-def _derive_positive_group_id(dataset: str, file_name: str) -> str:
-    """Derive a recording group for sequentially chunked positive recordings.
+def _derive_positive_group_id(
+    dataset: str,
+    relative_path: str,
+    file_name: str,
+) -> str:
+    """Derive a leakage-safe recording group for positive recordings.
 
-    Dataset-positive filenames currently end with a numeric chunk index, such
-    as ``B_S2_D1_067-bebop_003_``.  Removing that terminal suffix keeps sibling
-    chunks from the same source recording in a single split.  Filenames that
-    do not match use their full stem as a conservative one-file group.
-
-    Args:
-        dataset: Source dataset identifier.
-        file_name: Raw audio filename.
-
-    Returns:
-        Stable recording-group identifier.
+    Grouping rules are dataset-specific so that chunks from the same
+    physical recording never cross train/validation/test boundaries.
     """
 
+    relative = Path(relative_path)
+
+    # ---------------------------------------------------------
+    # Al-Emadi
+    # ---------------------------------------------------------
+    # Each labelled audio file is treated as its own recording.
+    if dataset == "al_emadi":
+        return f"{dataset}:{relative.as_posix()}"
+
+    # ---------------------------------------------------------
+    # UaVirBASE
+    # ---------------------------------------------------------
+    # Each recording has its own directory.
+    if dataset == "uavirbase":
+        return f"{dataset}:{relative.parent.as_posix()}"
+
+    # ---------------------------------------------------------
+    # DDL
+    # ---------------------------------------------------------
+    # DDL filenames contain:
+    #
+    # ...<flight_session>-<recording_session>-<sequence>
+    #
+    # Example:
+    # 20210329141240MINI0030240312886R290321-T004-005236.wav
+    #
+    # 290321 = flight session
+    # T004   = recording session
+    # 005236 = individual audio sequence/chunk
+    #
+    # All sequence chunks belonging to the same recording session
+    # must stay in the same train/validation/test split.
+        # ---------------------------------------------------------
+    # DDL
+    # ---------------------------------------------------------
+    # DDL contains many sequential WAV chunks belonging to the
+    # same recording/session directory. Keep the entire directory
+    # in one split so chunks from the same recording can never
+    # leak between train/validation/test.
+    if dataset == "ddl":
+        parent = relative.parent
+
+        if str(parent) not in {"", "."}:
+            return f"{dataset}:{parent.as_posix()}"
+
+        # Safety fallback if a DDL file is directly under datasets/raw/ddl.
+        return f"{dataset}:{Path(file_name).stem}"
+
+    # ---------------------------------------------------------
+    # Fallback for datasets without a dedicated grouping rule.
+    # ---------------------------------------------------------
     stem = Path(file_name).stem
-    group_stem = POSITIVE_CHUNK_SUFFIX.sub("", stem)
+
+    group_stem = POSITIVE_CHUNK_SUFFIX.sub(
+        "",
+        stem,
+    )
+
+    return f"{dataset}:{group_stem or stem}"
+
+    # ---------------------------------------------------------
+    # Default / other datasets
+    # ---------------------------------------------------------
+    # Remove a trailing numeric chunk index when present.
+    stem = Path(file_name).stem
+
+    group_stem = POSITIVE_CHUNK_SUFFIX.sub(
+        "",
+        stem,
+    )
+
     return f"{dataset}:{group_stem or stem}"
 
 
@@ -203,7 +267,9 @@ def _normalise_positive_rows(rows: Iterable[Mapping[str, str]]) -> list[dict[str
                 "source_category": "drone",
                 "source_fold": "",
                 "recording_group_id": _derive_positive_group_id(
-                    row["dataset"], row["file_name"]
+                    row["dataset"],
+                    row["relative_path"],
+                    row["file_name"],
                 ),
                 "size_bytes": row["size_bytes"],
                 "sha256": row["sha256"],

@@ -18,19 +18,22 @@ For the current binary experiment:
 yes_drone -> binary_label = 1
 unknown   -> binary_label = 0
 
-The supervised manifest builder will keep only label 1.
-The background manifest builder is responsible for label 0.
+The supervised manifest builder keeps only binary_label == 1.
+The background manifest builder handles binary_label == 0.
 """
-from utils.hashing import sha256_file
+
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Iterator
 
 from configs.dataset_rules import DatasetRule
+from utils.hashing import sha256_file
+
+from .base import DatasetAdapter
 
 
-class AlEmadiAdapter:
+class AlEmadiAdapter(DatasetAdapter):
     """Build manifest rows from the Al-Emadi dataset."""
 
     AUDIO_EXTENSIONS = {
@@ -45,12 +48,12 @@ class AlEmadiAdapter:
         self,
         dataset_directory: Path,
         rule: DatasetRule,
-    ) -> Iterator[dict]:
+    ) -> Iterator[dict[str, str | int]]:
         """
         Yield labelled audio rows from the Al-Emadi dataset.
 
-        Only directories explicitly declared in the DatasetRule are used.
-        No label is inferred from the dataset name.
+        Labels are taken only from the directories explicitly
+        declared in DatasetRule.
         """
 
         label_map = rule.directory_label_map()
@@ -78,9 +81,14 @@ class AlEmadiAdapter:
                 ):
                     continue
 
-                relative_path = audio_path.relative_to(
-                    dataset_directory
-                )
+                try:
+                    relative_path = (
+                        audio_path.relative_to(
+                            dataset_directory
+                        )
+                    )
+                except ValueError:
+                    continue
 
                 yield {
                     "dataset": rule.name,

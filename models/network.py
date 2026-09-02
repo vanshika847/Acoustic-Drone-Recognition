@@ -1,11 +1,9 @@
-"""Backward-compatible import for the acoustic drone model."""
+"""Backward-compatible network alias."""
 
-from models.acoustic_drone_model import AcousticDroneModel
-
-
-# Backward-compatible name for existing training/inference code.
-AcousticDroneNet = AcousticDroneModel
-
+from models.acoustic_drone_model import (
+    AcousticDroneModel,
+    AcousticDroneNet,
+)
 
 __all__ = [
     "AcousticDroneModel",

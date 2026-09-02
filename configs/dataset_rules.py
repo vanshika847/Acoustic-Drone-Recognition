@@ -190,6 +190,34 @@ DATASET_RULES: tuple[DatasetRule, ...] = (
         ),
     ),
 
+
+    DatasetRule(
+    name="kaist",
+    raw_directory_name="kaist",
+    enabled=True,
+    label_source=LabelSource.ANNOTATION_FILE,
+    description=(
+        "KAIST Drone Sound Dataset. "
+        "Drone type, movement direction, fault condition, "
+        "background environment and SNR are encoded in the "
+        "official audio filenames."
+    ),
+),
+
+
+    DatasetRule(
+    name="ddl",
+    raw_directory_name="ddl",
+    enabled=True,
+    label_source=LabelSource.DIRECTORY,
+    description=(
+        "DDL Drone Detection and Localization dataset. "
+        "The official filename convention encodes drone class, "
+        "bearing, range, altitude, temperature, sample type, "
+        "flight session, recording session, and sequence ID."
+    ),
+),
+
     # ========================================================
     # UAViBase
     # ========================================================
