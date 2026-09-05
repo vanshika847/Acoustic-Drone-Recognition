@@ -73,6 +73,8 @@ REQUIRED_MANIFEST_COLUMNS = frozenset(
         "segment_id",
         "processed_relative_path",
         "binary_label",
+        "source_sha256",
+        "recording_group_id",
         "sample_rate",
     }
 )
@@ -82,6 +84,10 @@ FEATURE_METADATA_COLUMNS = (
     "segment_file_name",
     "processed_relative_path",
     "binary_label",
+    "source_sha256",
+    "recording_group_id",
+    "source_dataset",
+    "source_relative_path",
     "feature_version",
     "status",
     "mfcc_path",
@@ -407,6 +413,10 @@ def process_segment_row(
         "segment_file_name": segment_file_name(segment_id),
         "processed_relative_path": row["processed_relative_path"],
         "binary_label": row["binary_label"],
+        "source_sha256": row["source_sha256"],
+        "recording_group_id": row["recording_group_id"],
+        "source_dataset": row["source_dataset"],
+        "source_relative_path": row["source_relative_path"],
         "feature_version": settings.feature_version,
     }
 

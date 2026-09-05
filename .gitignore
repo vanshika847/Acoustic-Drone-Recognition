@@ -22,3 +22,12 @@ models/checkpoints/
 # Python cache
 __pycache__/
 *.pycacoustic_drone_code.zip
+
+# Local datasets and generated artifacts
+datasets/
+features/
+outputs/
+evaluation_results/
+*.npy
+*.npz
+*.zip

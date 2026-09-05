@@ -1,387 +1,56 @@
-"""
-Pack existing per-segment feature .npy files into compact .npz shards.
-
-This does NOT re-extract features.
-It reads the already-created .npy files from features/ and packs them
-into larger shard files so the project no longer contains ~130,000
-individual feature files.
-
-Usage
------
-python pack_features.py
-python pack_features.py --shard-size 256
-"""
-
+"""Pack feature arrays into auditable NPZ shards."""
 from __future__ import annotations
-
 import argparse
 from pathlib import Path
-
-import numpy as np
-import pandas as pd
-
-
-PROJECT_ROOT = Path(__file__).resolve().parent
-
-FEATURES_ROOT = PROJECT_ROOT / "features"
-MANIFEST_ROOT = PROJECT_ROOT / "outputs" / "features"
-
-FEATURE_NAMES = (
-    "mfcc",
-    "mel",
-    "spectral",
-    "chroma",
-    "zcr",
-    "energy",
-)
-
-SPLITS = (
-    "train",
-    "validation",
-    "test",
-)
-
-
-def load_feature(path: Path, feature_name: str) -> np.ndarray:
-    """Load and validate one feature array."""
-
-    if not path.is_file():
-        raise FileNotFoundError(
-            f"Missing {feature_name} feature file: {path}"
-        )
-
-    array = np.load(
-        path,
-        allow_pickle=False,
-    )
-
-    array = np.asarray(
-        array,
-        dtype=np.float32,
-    )
-
-    if array.ndim != 2:
-        raise ValueError(
-            f"{feature_name} must be 2-D, got {array.shape}: {path}"
-        )
-
-    if array.shape[0] == 0 or array.shape[1] == 0:
-        raise ValueError(
-            f"{feature_name} is empty: {path}"
-        )
-
-    if not np.isfinite(array).all():
-        raise ValueError(
-            f"{feature_name} contains NaN/Inf: {path}"
-        )
-
-    return np.ascontiguousarray(array)
-
-
-def feature_path_from_manifest(
-    value: str,
-    segment_id: str,
-    feature_name: str,
-) -> Path:
-    """
-    Resolve an existing feature path.
-
-    Handles both absolute paths stored in the manifest and
-    paths relative to the repository.
-    """
-
-    raw = Path(value)
-
-    if raw.is_absolute() and raw.is_file():
-        return raw
-
-    if raw.is_absolute():
-        parts = list(raw.parts)
-
-        if "features" in parts:
-            index = parts.index("features")
-
-            candidate = (
-                PROJECT_ROOT
-                / Path(*parts[index:])
-            )
-
-            if candidate.is_file():
-                return candidate
-
-    candidate = (
-        PROJECT_ROOT / raw
-    ).resolve()
-
-    if candidate.is_file():
-        return candidate
-
-    # Final canonical fallback.
-    canonical = (
-        FEATURES_ROOT
-        / feature_name
-        / f"{segment_id.replace(':', '_')}.npy"
-    )
-
-    if canonical.is_file():
-        return canonical
-
-    raise FileNotFoundError(
-        f"Could not find {feature_name} feature for "
-        f"segment '{segment_id}'."
-    )
-
-
-def pack_split(
-    split: str,
-    shard_size: int,
-) -> None:
-    """Pack one split into .npz shards."""
-
-    manifest_path = (
-        MANIFEST_ROOT
-        / f"{split}_feature_manifest.csv"
-    )
-
-    if not manifest_path.is_file():
-        raise FileNotFoundError(
-            f"Feature manifest not found: {manifest_path}"
-        )
-
-    dataframe = pd.read_csv(
-        manifest_path,
-        dtype=str,
-        keep_default_na=False,
-    )
-
-    if "status" in dataframe.columns:
-        dataframe = dataframe[
-            dataframe["status"].isin(
-                ("success", "skipped")
-            )
-        ].copy()
-
-    dataframe = dataframe.reset_index(drop=True)
-
-    if dataframe.empty:
-        raise ValueError(
-            f"No usable feature rows found for {split}."
-        )
-
-    output_directory = (
-        FEATURES_ROOT
-        / "shards"
-        / split
-    )
-
-    output_directory.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
-
-    shard_rows: list[dict[str, str | int]] = []
-
-    total = len(dataframe)
-
-    print()
-    print("=" * 60)
-    print(f"PACKING {split.upper()}")
-    print("=" * 60)
-    print(f"Samples: {total}")
-    print(f"Shard size: {shard_size}")
-    print()
-
-    shard_number = 0
-
-    for start in range(
-        0,
-        total,
-        shard_size,
-    ):
-        end = min(
-            start + shard_size,
-            total,
-        )
-
-        batch = dataframe.iloc[start:end]
-
-        feature_batches: dict[str, list[np.ndarray]] = {
-            name: []
-            for name in FEATURE_NAMES
-        }
-
-        labels: list[int] = []
-        segment_ids: list[str] = []
-
-        print(
-            f"Packing shard {shard_number:04d} "
-            f"({start + 1}-{end}/{total})..."
-        )
-
-        for _, row in batch.iterrows():
-
-            segment_id = row["segment_id"]
-
-            for feature_name in FEATURE_NAMES:
-
-                path = feature_path_from_manifest(
-                    row[f"{feature_name}_path"],
-                    segment_id,
-                    feature_name,
-                )
-
-                array = load_feature(
-                    path,
-                    feature_name,
-                )
-
-                feature_batches[
-                    feature_name
-                ].append(array)
-
-            labels.append(
-                int(row["binary_label"])
-            )
-
-            segment_ids.append(
-                segment_id
-            )
-
-        # Stack into:
-        #
-        # (batch, channels, time)
-        #
-        arrays = {
-            feature_name: np.stack(
-                values,
-                axis=0,
-            ).astype(
-                np.float32,
-                copy=False,
-            )
-            for feature_name, values
-            in feature_batches.items()
-        }
-
-        labels_array = np.asarray(
-            labels,
-            dtype=np.int64,
-        )
-
-        segment_ids_array = np.asarray(
-            segment_ids,
-            dtype=np.str_,
-        )
-
-        shard_path = (
-            output_directory
-            / f"shard_{shard_number:04d}.npz"
-        )
-
-        np.savez_compressed(
-            shard_path,
-            mfcc=arrays["mfcc"],
-            mel=arrays["mel"],
-            spectral=arrays["spectral"],
-            chroma=arrays["chroma"],
-            zcr=arrays["zcr"],
-            energy=arrays["energy"],
-            labels=labels_array,
-            segment_ids=segment_ids_array,
-        )
-
-        for local_index, segment_id in enumerate(
-            segment_ids
-        ):
-            shard_rows.append(
-                {
-                    "split": split,
-                    "segment_id": segment_id,
-                    "binary_label": labels[
-                        local_index
-                    ],
-                    "shard_path": str(
-                        shard_path
-                    ),
-                    "shard_index": local_index,
-                }
-            )
-
-        shard_number += 1
-
-    metadata_path = (
-        MANIFEST_ROOT
-        / f"{split}_shard_manifest.csv"
-    )
-
-    metadata = pd.DataFrame(
-        shard_rows
-    )
-
-    metadata.to_csv(
-        metadata_path,
-        index=False,
-    )
-
-    print()
-    print(
-        f"Created {shard_number} shards."
-    )
-    print(
-        f"Shard manifest: {metadata_path}"
-    )
-
-
-def parse_arguments() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description=__doc__
-    )
-
-    parser.add_argument(
-        "--shard-size",
-        type=int,
-        default=256,
-        help=(
-            "Number of segments per shard. "
-            "Default: 256."
-        ),
-    )
-
-    return parser.parse_args()
-
-
-def main() -> None:
-
-    arguments = parse_arguments()
-
-    if arguments.shard_size <= 0:
-        raise ValueError(
-            "--shard-size must be greater than zero."
-        )
-
-    print()
-    print("=" * 60)
-    print("ACOUSTIC DRONE FEATURE SHARD BUILDER")
-    print("=" * 60)
-
-    for split in SPLITS:
-        pack_split(
-            split=split,
-            shard_size=arguments.shard_size,
-        )
-
-    print()
-    print("=" * 60)
-    print("SHARD BUILD COMPLETE")
-    print("=" * 60)
-    print()
-    print(
-        "Your original .npy files have NOT been deleted."
-    )
-    print(
-        "We will verify the new dataset before deleting them."
-    )
-
-
-if __name__ == "__main__":
-    main()
+import numpy as np, pandas as pd
+from configs.config import OUTPUT_DIR, PROJECT_ROOT
+FEATURES_ROOT=PROJECT_ROOT/"features"; MANIFEST_ROOT=OUTPUT_DIR/"features"; SPLITS=("train","validation","test"); FEATURE_NAMES=("mfcc","mel","spectral","chroma","zcr","energy")
+
+def load_feature(path, name):
+    p=Path(path)
+    if not p.is_file(): raise FileNotFoundError(f"Missing {name}: {p}")
+    a=np.asarray(np.load(p,allow_pickle=False),dtype=np.float32)
+    if a.ndim!=2 or 0 in a.shape or not np.isfinite(a).all(): raise ValueError(f"Invalid {name} array: {p} shape={a.shape}")
+    return np.ascontiguousarray(a)
+
+def feature_path_from_manifest(value, segment_id, feature_name):
+    p=Path(value)
+    candidates=[p if p.is_absolute() else (PROJECT_ROOT/p).resolve(), FEATURES_ROOT/feature_name/f"{segment_id.replace(':','_')}.npy"]
+    for c in candidates:
+        if c.is_file(): return c.resolve()
+    raise FileNotFoundError(f"Could not find {feature_name} for {segment_id}")
+
+def pack_split(split,shard_size=256):
+    if split not in SPLITS: raise ValueError(split)
+    mp=MANIFEST_ROOT/f"{split}_feature_manifest.csv"
+    if not mp.is_file(): raise FileNotFoundError(mp)
+    df=pd.read_csv(mp,dtype=str,keep_default_na=False)
+    req={"split","segment_id","binary_label","source_sha256","recording_group_id",*(f"{n}_path" for n in FEATURE_NAMES)}
+    missing=req-set(df.columns)
+    if missing: raise ValueError(f"{mp} missing: {', '.join(sorted(missing))}")
+    if "status" in df.columns and (df.status.astype(str)=="failed").any(): raise ValueError(f"{mp} contains failed feature rows")
+    df=df[df.get("status",pd.Series(["success"]*len(df))).isin(["success","skipped"])].copy().reset_index(drop=True)
+    if df.empty: raise ValueError(f"No usable rows: {mp}")
+    if set(df.split.astype(str))!={split}: raise ValueError(f"{mp} contains wrong split values")
+    if df.segment_id.astype(str).duplicated().any(): raise ValueError(f"{mp} contains duplicate segment_id")
+    out=FEATURES_ROOT/"shards"/split; out.mkdir(parents=True,exist_ok=True)
+    for old in out.glob("shard_*.npz"): old.unlink()
+    rows=[]
+    for sn,start in enumerate(range(0,len(df),shard_size)):
+        batch=df.iloc[start:start+shard_size]
+        fb={n:[] for n in FEATURE_NAMES}; labels=[]; ids=[]; shas=[]; groups=[]
+        for _,r in batch.iterrows():
+            sid=str(r.segment_id)
+            for n in FEATURE_NAMES: fb[n].append(load_feature(feature_path_from_manifest(r[f"{n}_path"],sid,n),n))
+            labels.append(int(r.binary_label)); ids.append(sid); shas.append(str(r.source_sha256)); groups.append(str(r.recording_group_id))
+        arrays={n:np.stack(v).astype(np.float32,copy=False) for n,v in fb.items()}
+        sp=out/f"shard_{sn:04d}.npz"
+        np.savez_compressed(sp,**arrays,labels=np.asarray(labels,dtype=np.int64),segment_ids=np.asarray(ids,dtype=np.str_),source_sha256=np.asarray(shas,dtype=np.str_),recording_group_ids=np.asarray(groups,dtype=np.str_))
+        for i,sid in enumerate(ids): rows.append({"split":split,"segment_id":sid,"binary_label":labels[i],"source_sha256":shas[i],"recording_group_id":groups[i],"source_dataset":str(batch.iloc[i].get("source_dataset","")),"source_relative_path":str(batch.iloc[i].get("source_relative_path","")),"shard_path":str(sp),"shard_index":i})
+    outm=MANIFEST_ROOT/f"{split}_shard_manifest.csv"; pd.DataFrame(rows).to_csv(outm,index=False); print(f"{split}: {len(rows):,} rows -> {outm}")
+
+def main():
+    p=argparse.ArgumentParser(); p.add_argument("--shard-size",type=int,default=256); a=p.parse_args()
+    if a.shard_size<1: raise SystemExit("--shard-size must be >0")
+    for s in SPLITS: pack_split(s,a.shard_size)
+if __name__=="__main__": main()
